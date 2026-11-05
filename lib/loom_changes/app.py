@@ -446,7 +446,8 @@ def trusted_index(change_ids, d):
     for t in (d.get("tasks") or []) if isinstance(d, dict) else []:
         if not isinstance(t, dict) or not isinstance(t.get("id"), str):
             continue
-        text = "\n".join([t.get("description") or ""] + [(c or {}).get("text") or "" for c in t.get("comments") or []
+        # A comment is {actor, at, text} (taskstore-core it-ts-annotate); an agent comments as its loom name.
+        text = "\n".join([t.get("description") or ""] + [c.get("text") or "" for c in t.get("comments") or []
                                                         if isinstance(c, dict) and c.get("actor") in who])
         for cid in set(citations(text)) & wanted:
             out.setdefault(cid, []).append(t["id"])
@@ -750,7 +751,10 @@ def project_feed(args):
     return {"groups": out[:8]}
 
 
-BAD_WORDS = ("CI red", "Conflicts", "Changes asked for", "Can't be merged")
+# ---------------------------------------------------------------- a Comms thread's section (loom docs/specs/comms.md)
+
+# The Words that read as a problem in a thread's panel (its "bad" tone).
+PROBLEM_WORDS = ("CI red", "Conflicts", "Changes asked for", "Can't be merged")
 
 
 def thread_item(c, rules, made):
@@ -758,7 +762,7 @@ def thread_item(c, rules, made):
     title = f"{short(c)} {c['title']}"
     if len(title) > 200:
         title = title[:199].rsplit(" ", 1)[0] + "…"
-    tone = "bad" if words in BAD_WORDS else "warn" if cls == "you" else "ok" if c["state"] == "merged" else None
+    tone = "bad" if words in PROBLEM_WORDS else "warn" if cls == "you" else "ok" if c["state"] == "merged" else None
     it = {"title": title, "ref": c["id"][:200], "status": words[:24], "when": iso(parse(c["updated"]) or now()), "page": c["page"]}
     if tone:
         it["tone"] = tone
@@ -775,7 +779,17 @@ def thread_feed(args):
     snap = load() or {"changes": []}
     by_id = {c["id"]: c for c in snap["changes"]}
     made = [c for c in snap["changes"] if conversation_of(c, snap) == cv]
-    named = [r for r in args.get("ref", []) if CITE.fullmatch(r.split(":", 1)[1] if r.startswith("github:") else "")]
+    # A ref as the thread wrote it (Acme/App#2) is the snapshot's id once normalised, as citations are (repo_id).
+    named = []
+    for r in args.get("ref", []):
+        m = re.fullmatch(r"github:([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)#([1-9][0-9]{0,9})", r)
+        if m:
+            try:
+                rid = f"{forges.repo_id('github:' + m.group(1))}#{m.group(2)}"
+            except ValueError:
+                continue
+            if rid not in named:
+                named.append(rid)
     rules = rules_for([c for c in made + [by_id[r] for r in named if r in by_id] if c["state"] == "open"])
     out, seen = [], set()
     for c in sorted(made, key=lambda c: -(parse(c["updated"]) or now()).timestamp()):
@@ -788,10 +802,9 @@ def thread_feed(args):
         if r in by_id:
             out.append(thread_item(by_id[r], rules, False))
         else:
-            m = re.fullmatch(r"github:([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)#([1-9][0-9]{0,9})", r)
-            if m:
-                out.append({"title": f"{m.group(1)}#{m.group(2)}"[:200], "ref": r[:200], "status": "Not tracked",
-                            "href": f"https://github.com/{m.group(1)}/issues/{m.group(2)}"})
+            loc, n = r[len("github:"):].rsplit("#", 1)
+            out.append({"title": f"{loc}#{n}"[:200], "ref": r[:200], "status": "Not tracked",
+                        "href": f"https://github.com/{loc}/issues/{n}"})
     return {"items": out[:50]}
 
 

@@ -506,13 +506,29 @@ class Thread(Env):
 
     def test_the_owners_comment_counts_once_named(self):
         d = json.loads(self.tasks.read_text())
-        next(t for t in d["tasks"] if t["id"] == "t-4")["comments"].append({"actor": "jonathan", "text": "and acme/app#9"})
+        next(t for t in d["tasks"] if t["id"] == "t-4")["comments"].append({"actor": "olive", "text": "and acme/app#9"})
         self.tasks.write_text(json.dumps(d))
         self.sync()
         self.assertIsNone(app.conversation_of(self.change(9), app.load()))
-        with mock.patch.dict(os.environ, {"CHANGES_TASK_OWNER": "jonathan"}):
+        with mock.patch.dict(os.environ, {"CHANGES_TASK_OWNER": "olive"}):
             self.sync()
         self.assertEqual(app.conversation_of(self.change(9), app.load()), CV)
+
+    def test_a_ref_as_written_finds_the_snapshots_change_once(self):
+        by = [i for i in self.feed("github:Acme/App#2", "github:acme/app#2")["items"] if i["ref"] == "github:acme/app#2"]
+        self.assertEqual(len(by), 1)
+        self.assertEqual(by[0]["status"], "CI red")
+
+    def test_caps_hold_against_data_that_would_break_them(self):
+        snap = app.load()
+        base = self.change(1)
+        snap["changes"] = [dict(base, number=100 + i, id=f"github:acme/app#{100 + i}", page=f"c/github/acme/app/{100 + i}",
+                                title="word " * 80, head={"ref": "x", "id": SHA(100 + i)}) for i in range(60)]
+        snap["trusted"] = {c["id"]: ["t-2"] for c in snap["changes"]}
+        app.write_private(Path(self.env["CHANGES_DIR"]) / "snapshot.json", json.dumps(snap))
+        items = self.feed()["items"]
+        self.assertEqual(len(items), 50)
+        self.assertTrue(all(i["made"] and len(i["title"]) <= 200 and i["title"].endswith("…") for i in items))
 
     def test_a_change_page_says_where_it_came_from(self):
         page = app.ui_page({"path": self.change(2)["page"], "caller": OWNER})
@@ -524,6 +540,7 @@ class Thread(Env):
         self.assertEqual(app.project_feed(app.feed_args(["--project", "nope", "--conversation", CV]))["groups"], [])
         f = app.project_feed(app.feed_args(["--project", "app", "--repo", "github:acme/app", "--conversation", CV]))
         self.assertIn("github:acme/app#2", [i["ref"] for g in f["groups"] for i in g["items"]])
+
 
 if __name__ == "__main__":
     unittest.main()

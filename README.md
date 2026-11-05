@@ -106,6 +106,7 @@ it (`loom-piece-changes-sync.service`).
 | `CHANGES_OWNER_LOGINS` | none | JSON list of your own forge logins |
 | `CHANGES_PROJECTS` | `loom project list --json` | The command that lists project cards |
 | `CHANGES_TASKS` | `loom tasks` | The tasks piece's command. Its `export` is read once a sync, for tasks that cite a change |
+| `CHANGES_TASK_OWNER` | none | Your name in the tasks piece (its `TASKSTORE_OWNER`). Your task comments that cite a change then say which Comms thread it came from, as an agent's do |
 | `CHANGES_GH` | `gh` | The GitHub CLI to run, when the `gh` on `PATH` is a wrapper |
 
 None holds a secret.
