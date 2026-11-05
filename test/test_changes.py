@@ -308,6 +308,37 @@ class Actions(Env):
         self.assertTrue(Path(self.env["CHANGES_DIR"], "refresh.request").exists())
 
 
+class Owner(Env):
+    """is_owner fails closed: only a caller of kind owner with unrestricted agents."""
+
+    def test_who_is_the_owner(self):
+        self.assertTrue(app.is_owner({"caller": OWNER}))
+        self.assertTrue(app.is_owner({"caller": {"kind": "owner", "who": "olive-owner"}}), "agents absent: unrestricted")
+        for req in ({}, None, {"caller": None}, {"caller": {"kind": "agent", "agent": "ada"}},
+                    {"caller": {"kind": "owner", "who": "sam", "agents": ["ada"]}}, {"caller": "owner"}):
+            self.assertFalse(app.is_owner(req), req)
+
+    def test_no_caller_gets_no_buttons_and_no_action(self):
+        self.sync()
+        page = app.ui_page({"path": "c/github/acme/app/1"})
+        self.assertNotIn('"buttons"', json.dumps([s for s in page["sections"] if s["id"] == "state"]))
+        r = app.ui_act({"action": "yes", "fields": {"id": "github:acme/app#1", "head": SHA(1)}})
+        self.assertFalse(r["ok"])
+        self.assertFalse(app.ui_act({"action": "yes", "caller": {"kind": "agent", "agent": "ada"},
+                                     "fields": {"id": "github:acme/app#1", "head": SHA(1)}})["ok"])
+        self.assertEqual([c["argv"][0] for c in self.ap_calls()], ["rule"], "the page's read only: no grant, no rule set")
+
+    def test_the_api_is_refused_with_or_without_a_caller(self):
+        import io
+        for body in ({}, {"path": "act", "body": {"action": "yes"}}, {"caller": OWNER, "path": "act"},
+                     {"caller": {"kind": "agent", "agent": "ada"}, "path": "run"}):
+            out = io.StringIO()
+            with mock.patch.object(sys, "stdin", io.StringIO(json.dumps(body))), mock.patch.object(sys, "stdout", out):
+                app.main(["api", "--json"])
+            self.assertEqual(json.loads(out.getvalue())["status"], 404)
+        self.assertEqual(self.ap_calls(), [])
+
+
 class Feed(Env):
     def setUp(self):
         super().setUp()

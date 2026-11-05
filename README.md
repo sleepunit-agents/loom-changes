@@ -109,7 +109,11 @@ None holds a secret.
   `git-pull-request` icon) and a tile ("2 waiting on you"). `ui page --json`
   draws the index (`""`) and a change (`c/<forge>/<locator>/<n>`) from the
   snapshot alone, so it answers well inside loom's 3 s. `ui act --json`
-  takes Yes, Not yet, Always and Refresh, for the household's owner only. Each
+  takes Yes, Not yet, Always and Refresh, for the household's owner only:
+  a caller of kind `owner` with every agent, as loom passes it for a signed-in
+  member. With no caller (a loom without a household, or a run by hand) the
+  buttons are absent and every action is refused: it fails closed. The piece
+  has no API; `api --json` refuses every call. Each
   one refuses a head that moved since the page was drawn.
 - **The approvals piece.** It's asked once per draw, for each agent with open
   changes: `approvals rule merge <target>… --for <agent> --json`. Yes and Not

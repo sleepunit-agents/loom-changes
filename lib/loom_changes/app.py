@@ -422,10 +422,11 @@ def find(snap, path):
 
 
 def is_owner(req):
+    """The household's owner, by loom's own rule (src/ui/pieces.ts, withGrant): a caller of kind owner whose agents
+    are unrestricted (absent or "*"). Fails closed: no caller (a run that isn't loom's page for a signed-in member,
+    or a loom without a household) is not the owner, so no button is drawn and no action runs."""
     c = (req or {}).get("caller")
-    if c is None:
-        return True
-    return isinstance(c, dict) and c.get("kind") == "owner" and c.get("agents") == "*"
+    return isinstance(c, dict) and c.get("kind") == "owner" and c.get("agents") in (None, "*")
 
 
 def stale_note(snap):
@@ -718,6 +719,11 @@ def main(argv=None):
         if not fn:
             sys.exit(2)
         print(json.dumps(fn()))
+        return
+    if args[:1] == ["api"]:
+        # The piece API: Changes offers none. Every call is refused, owner's or agent's, with a caller or without,
+        # so nothing here acts for anyone but loom's page (ui act).
+        print(json.dumps({"status": 404, "body": {"error": "Changes has no API; its actions are the owner's, on loom's page"}}))
         return
     if args[:1] == ["project-feed"]:
         print(json.dumps(project_feed(feed_args(args[1:]))))
