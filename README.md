@@ -19,7 +19,14 @@ loom-changes refresh                ask the service for a read now
 loom-changes list                   the open changes, from the snapshot
 loom-changes cited-by t-123 --json  the changes that cite a task
 loom-changes project-feed --json --project SLUG --since ISO [--repo R]…   a project hub's section
+loom-changes thread-feed --json --conversation CV [--ref R]…              a Comms thread's changes
 ```
+
+A change can also say which loom Comms thread it was made in, but only when a
+task vouches for it: the task's description cites the change, or an agent's (or
+the owner's) comment on it does, and the task's `source` is that conversation.
+Nothing on the forge counts, not a `cv-…` id in a change's title, body or
+branch, nor its own task ids: anyone with access can type there.
 
 The design is loom's `docs/specs/changes.md`.
 
