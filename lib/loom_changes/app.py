@@ -246,7 +246,15 @@ def rules_for(changes):
     try:
         for agent, ts in by_agent.items():
             for i in range(0, len(ts), 200):
-                out.update(json.loads(approvals(["rule", "merge", *ts[i:i + 200], "--for", agent, "--json"])))
+                got = json.loads(approvals(["rule", "merge", *ts[i:i + 200], "--for", agent, "--json"]))
+                if not isinstance(got, dict):
+                    return None
+                for t, r in got.items():
+                    # An answer that isn't one reads as no answer: row 7, without buttons.
+                    if not isinstance(r, dict) or r.get("tier") not in ("do", "tell", "ask"):
+                        return None
+                    ap = r.get("approval")
+                    out[t] = {"tier": r["tier"], **({"approval": ap} if isinstance(ap, dict) and isinstance(ap.get("state"), str) else {})}
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
         return None
     return out
@@ -438,7 +446,9 @@ def stale_note(snap):
 
 def row_of(c, rules):
     cls, words = waits_on(c, rules)
-    meta = " · ".join(x for x in (state_line(c, words), who_name(c["author"]), ago(c["updated"])) if x)
+    asked = [who_name(p) for p in c["people"] if p["role"] == "requested"]
+    line = state_line(c, words) + (f" from {', '.join(asked[:3])}" if cls == "reviewer" and asked else "")
+    meta = " · ".join(x for x in (line, who_name(c["author"]), ago(c["updated"])) if x)
     item = {"text": f"{short(c)} {c['title']}", "meta": meta, "page": c["page"], "avatar": initials(who_name(c["author"]))}
     agent = agent_of(c)
     if agent:
@@ -531,7 +541,7 @@ def change_page(req, snap, c):
         top.append(note)
     top.append({"type": "health", "tone": {"you": "warn", "agent": "ok", "done": "ok"}.get(cls, "bad" if words in ("CI red", "Conflicts") else "muted"),
                 "text": words, "detail": state_line(c, words)})
-    if cls == "you" and is_owner(req):
+    if cls == "you" and is_owner(req) and rules is not None:
         proj = next((p for p in snap["projects"] if c["repo"] in p["repos"]), None)
         f = {"id": c["id"], "head": c["head"]["id"]}
         top.append({"type": "text", "text": f"Saying yes lets {name_of(agent)} merge exactly this commit, {c['head']['id'][:7]}. A new push asks again."})
@@ -544,7 +554,7 @@ def change_page(req, snap, c):
         r = (rules or {}).get(target_of(c)) or {}
         top.append({"type": "text", "tone": "muted", "text": (f"{name_of(agent)} merges this on its own once it's green" if r.get("tier") in ("do", "tell")
                                                               else f"You said yes; {name_of(agent)} merges it") + "."})
-    elif cls == "you" and rules is None:
+    elif cls == "you" and rules is None and is_owner(req):
         top.append({"type": "text", "tone": "muted", "text": "The approvals piece didn't answer, so this can't be said yes to right now."})
     sections.append({"id": "state", "blocks": top})
     ch = c["checks"]

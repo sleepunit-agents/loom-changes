@@ -24,6 +24,9 @@ def gh():
     return os.environ.get("CHANGES_GH") or "gh"
 
 
+TOKENISH = re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})")
+
+
 class NotARead(Exception):
     """A call that isn't a read: refused before it runs."""
 
@@ -51,6 +54,8 @@ def gate(argv):
                 raise NotARead("no --input: the document must be seen")
             fields.append(a.split("=", 1)[1])
         i += 1
+    if any(f.split("=", 1)[-1].startswith("@") for f in fields):
+        raise NotARead("no field from a file (@…): the document must be seen")
     if method and method.upper() != "GET":
         raise NotARead(f"method {method} isn't a read")
     if graphql:
@@ -92,6 +97,8 @@ def call(argv, identity):
     out, err = r.stdout or "", r.stderr or ""
     if tok:
         out, err = out.replace(tok, "[redacted]"), err.replace(tok, "[redacted]")
+    # Whatever identity read (the CLI's default too): anything shaped like a GitHub token never leaves.
+    err = TOKENISH.sub("[redacted]", err)
     if r.returncode != 0:
         line = next((x for x in err.splitlines() if x.strip()), "") or f"gh exited {r.returncode}"
         raise RuntimeError(line[:300])

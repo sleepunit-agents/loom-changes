@@ -111,10 +111,27 @@ class Adapter(Env):
         bad = [["pr", "merge", "1"], ["api", "graphql", "-f", "query=mutation { addComment }"],
                ["api", "graphql", "-f", "query=query {} mutation x {}"], ["api", "-X", "POST", "repos/a/b/issues"],
                ["api", "--method=PATCH", "repos/a/b"], ["api", "repos/a/b/issues", "-f", "title=x"],
-               ["api", "graphql", "--input", "q.graphql"], ["api", "graphql"], ["auth", "token"], []]
+               ["api", "graphql", "--input", "q.graphql"], ["api", "graphql"], ["auth", "token"], [],
+               ["api", "graphql", "-F", "query=@mutation.graphql"], ["api", "graphql", "-f", "query=@q.graphql"],
+               ["api", "graphql", "-f", "query=query { x }", "-F", "n=@file"]]
         for argv in bad:
             with self.assertRaises(github.NotARead, msg=argv):
                 github.gate(argv)
+
+    def test_a_call_that_isnt_a_read_never_starts_a_process(self):
+        for argv in (["pr", "merge", "1"], ["api", "-X", "POST", "repos/a/b/issues"], ["api", "graphql", "-f", "query=mutation { x }"]):
+            with self.assertRaises(github.NotARead):
+                github.call(argv, "ada-bot")
+        self.assertFalse(Path(self.env["FAKE_GH_LOG"]).exists(), "not even auth token ran")
+
+    def test_a_token_shaped_string_in_an_error_is_redacted_whoever_read(self):
+        with mock.patch.object(github, "RUN") as run:
+            run.return_value = mock.Mock(returncode=1, stdout="", stderr="bad credentials ghp_" + "A" * 36 + " and github_pat_" + "b" * 30)
+            with self.assertRaises(RuntimeError) as e:
+                github.call(["api", "graphql", "-f", "query=query { x }"], None)
+        self.assertNotIn("ghp_A", str(e.exception))
+        self.assertNotIn("github_pat_b", str(e.exception))
+        self.assertIn("[redacted]", str(e.exception))
 
     def test_at_the_process_boundary_only_reads_ran_and_the_token_went_nowhere(self):
         self.sync()
@@ -129,8 +146,13 @@ class Adapter(Env):
         self.assertEqual({next(x for x in c["argv"] if x.startswith("owner=")): c["token"] for c in reads},
                          {"owner=acme": "tok-SECRET-ada-bot", "owner=locked": None})
         # Planted token: nowhere in the piece's files, pages, feed, or what it prints.
+        printed = []
         with mock.patch.dict(os.environ, {"CHANGES_IDENTITIES": json.dumps({"github:acme": "ada-bot", "github:locked": "ada-bot"})}):
-            snap = self.sync()
+            with mock.patch.object(github, "datetime", wraps=datetime) as dt:
+                dt.now.return_value = NOW
+                snap = app.sync_once(printed.append)
+        self.assertTrue(printed, "the failing repo was logged")
+        self.assertFalse(any("tok-SECRET" in m for m in printed), "nothing the piece prints carries it")
         self.assertIn("[redacted]", snap["repos"]["github:locked/repo"]["error"])
         seen = [p.read_text() for p in Path(self.env["CHANGES_DIR"]).iterdir() if p.is_file()]
         seen += [json.dumps(app.ui_manifest()), json.dumps(app.ui_page({"path": ""})),
@@ -242,6 +264,10 @@ class Pages(Env):
         app.write_private(Path(self.env["CHANGES_DIR"]) / "snapshot.json", json.dumps(snap))
         blocks = app.ui_page({"path": ""})["sections"][0]["blocks"]
         self.assertEqual(blocks[0]["text"][:21], "Last read 1 hour ago.")
+        snap["at"] = "2026-11-05T11:55:00Z"
+        app.write_private(Path(self.env["CHANGES_DIR"]) / "snapshot.json", json.dumps(snap))
+        fresh = json.dumps(app.ui_page({"path": ""})["sections"][0]["blocks"])
+        self.assertNotIn("Last read", fresh)
 
     def buttons(self, n, rules="{}", caller=OWNER):
         with mock.patch.dict(os.environ, {"FAKE_RULES": rules}):
@@ -259,6 +285,16 @@ class Pages(Env):
         self.assertEqual(self.buttons(11)[0], [], "someone else's: no buttons")
         self.assertEqual(self.buttons(12)[0], [], "an outsider on an ada/ branch: no buttons")
         self.assertEqual(self.buttons(1, caller={"kind": "owner", "who": "sam", "agents": ["ada"]})[0], [])
+        # The approvals piece doesn't answer, or answers nonsense: no buttons, and the page says why.
+        for broken in ({"CHANGES_APPROVALS": "/no/such/approvals"}, {"FAKE_RULES": json.dumps({f"github:acme/app#1@{SHA(1)}": {"tier": "sure"}})}):
+            with mock.patch.dict(os.environ, broken):
+                page = app.ui_page({"path": "c/github/acme/app/1", "caller": OWNER})
+            self.assertNotIn('"buttons"', json.dumps(page))
+            self.assertIn("didn't answer", json.dumps(page))
+
+    def test_a_reviewer_is_named_when_one_was_asked(self):
+        row = app.row_of(self.change(7), {})[1]
+        self.assertIn("needs review from Sam Lee, Core", row["meta"])
 
     def test_tasks_both_ways(self):
         self.assertEqual(app.tasks_cited(self.change(1)), ["t-1"])
@@ -361,6 +397,22 @@ class Feed(Env):
         # Without --repo: the project's own repos, as the snapshot read them; a project with none, nothing.
         self.assertEqual(app.project_feed(app.feed_args(["--project", "app"]))["groups"], f["groups"])
         self.assertEqual(app.project_feed(app.feed_args(["--project", "nope"])), {"groups": []})
+
+
+    def test_caps_hold_against_data_that_would_break_them(self):
+        # Caps against data that would break them: a long title, long words, 60 changes.
+        snap = app.load()
+        base = self.change(1)
+        many = [dict(base, number=100 + i, id=f"github:acme/app#{100 + i}", page=f"c/github/acme/app/{100 + i}",
+                     title="word " * 80, head={"ref": "x", "id": SHA(100 + i)}) for i in range(60)]
+        snap["changes"] = many
+        app.write_private(Path(self.env["CHANGES_DIR"]) / "snapshot.json", json.dumps(snap))
+        with mock.patch.object(app, "waits_on", lambda c, r: ("you", "Waiting on the reviewers of everything")):
+            capped = app.project_feed(app.feed_args(["--project", "app", "--repo", "github:acme/app"]))
+        items = [i for g in capped["groups"] for i in g["items"]]
+        self.assertEqual(len(items), 50)
+        self.assertTrue(all(len(i["title"]) <= 200 and i["title"].endswith("…") for i in items))
+        self.assertTrue(all(len(i["status"]) <= 24 for i in items))
 
 
 if __name__ == "__main__":
