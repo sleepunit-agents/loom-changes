@@ -1,0 +1,40 @@
+{
+  "name": "loom-changes",
+  "version": "0.1.0",
+  "private": true,
+  "description": "loom's Changes piece: what's waiting to go up across the forges a household's projects live on, read-only, with the owner's Yes for the merges a rule says to ask about",
+  "bin": {
+    "loom-changes": "bin/changes"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "python3 -m unittest discover -s test -p 'test_*.py' && sh test/smoke.sh"
+  },
+  "license": "AGPL-3.0-or-later",
+  "loom": {
+    "name": "changes",
+    "label": "Changes",
+    "description": "What's waiting to go up: every open change in your projects' repos, by project, read-only, with Yes, merge it where a rule asks you.",
+    "settings": [
+      { "name": "CHANGES_DIR", "label": "Where the snapshot is kept", "hint": "a directory", "default": "${LOOM_PIECE_HOME}/data" },
+      { "name": "CHANGES_INTERVAL", "label": "Seconds between reads", "hint": "60 to 3600", "default": "180" },
+      { "name": "CHANGES_IDENTITIES", "label": "Who reads which owner", "hint": "JSON, like {\"github:acme\": \"octocat\"}: the forge login whose stored credential reads that owner's repos" },
+      { "name": "CHANGES_AGENTS", "label": "Which changes are an agent's", "hint": "JSON, like {\"ada\": {\"logins\": [\"ada-bot\"], \"branches\": [\"ada/\"]}}" },
+      { "name": "CHANGES_OWNER_LOGINS", "label": "Your own forge logins", "hint": "JSON, like [\"octocat\"]: your own changes read as yours" },
+      { "name": "CHANGES_PROJECTS", "label": "How to list projects", "hint": "a command that prints project cards as JSON", "default": "loom project list --json" },
+      { "name": "CHANGES_TASKS", "label": "How to read tasks", "hint": "the tasks piece's command; its export is read for citations", "default": "loom tasks" },
+      { "name": "CHANGES_GH", "label": "The gh command", "hint": "a path to the GitHub CLI, if gh on PATH isn't the plain one" }
+    ],
+    "services": [
+      { "name": "sync", "argv": ["loom-changes", "sync"] }
+    ],
+    "sections": {
+      "project": { "label": "Changes", "argv": ["loom-changes", "project-feed", "--json"] }
+    }
+  }
+}

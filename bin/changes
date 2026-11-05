@@ -1,0 +1,11 @@
+#!/usr/bin/env python3
+"""loom-changes: what's waiting to go up (loom docs/specs/changes.md). The code is in lib/loom_changes."""
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), "..", "lib"))
+
+from loom_changes.app import main  # noqa: E402
+
+if __name__ == "__main__":
+    main()
