@@ -227,7 +227,10 @@ def approvals(argv, stdin=None, timeout=2.5):
     b = approvals_bin()
     if not b:
         raise FileNotFoundError("the approvals piece isn't installed")
-    r = subprocess.run([b, *argv], input=stdin, capture_output=True, text=True, timeout=timeout,
+    # Run as the approvals piece, not as this one: without this piece's home in its environment it finds its own
+    # (from where it's installed) and reads its own store and settings, never a store under this piece's data.
+    env = {k: v for k, v in os.environ.items() if k not in ("LOOM_PIECE_HOME", "LOOM_PIECE_NAME") and not k.startswith("CHANGES_")}
+    r = subprocess.run([b, *argv], input=stdin, capture_output=True, text=True, timeout=timeout, env=env,
                        stdin=None if stdin is not None else subprocess.DEVNULL)
     if r.returncode != 0:
         raise RuntimeError((r.stderr or r.stdout).strip().splitlines()[-1] if (r.stderr or r.stdout).strip() else "approvals failed")

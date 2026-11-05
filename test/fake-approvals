@@ -2,7 +2,8 @@
 """A stand-in for the approvals piece: rule answers from FAKE_RULES, and every call recorded."""
 import json, os, sys
 with open(os.environ["FAKE_APPROVALS_LOG"], "a") as f:
-    f.write(json.dumps({"argv": sys.argv[1:], "stdin": None if sys.stdin.isatty() else sys.stdin.read()}) + "\n")
+    f.write(json.dumps({"argv": sys.argv[1:], "stdin": None if sys.stdin.isatty() else sys.stdin.read(),
+                        "piece_home": os.environ.get("LOOM_PIECE_HOME"), "changes_env": sorted(k for k in os.environ if k.startswith("CHANGES_"))}) + "\n")
 a = sys.argv[1:]
 if a[:2] == ["rule", "merge"]:
     rules = json.loads(os.environ.get("FAKE_RULES", "{}"))
