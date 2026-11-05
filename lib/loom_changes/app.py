@@ -158,7 +158,10 @@ def sync_once(log=lambda m: None):
                 snap["repos"][rid] = {"at": (old.get("repos", {}).get(rid) or {}).get("at"), "error": why}
                 snap["changes"] += [c for c in old.get("changes", []) if c.get("repo") == rid]
                 log(f"changes: {rid}: {why}")
-        snap["citing"] = tasks_index([c["id"] for c in snap["changes"]])
+        exported = tasks_export()
+        snap["citing"] = tasks_index([c["id"] for c in snap["changes"]], exported)
+        snap["sources"] = task_sources(exported)
+        snap["trusted"] = trusted_index([c["id"] for c in snap["changes"]], exported)
         write_private(d / "snapshot.json", json.dumps(snap, indent=1) + "\n")
         return snap
 
@@ -404,15 +407,64 @@ def citations(text):
     return out
 
 
-def tasks_index(change_ids):
-    """{change id: [{id, title, status}]} for the tasks whose description or comments cite a change, from the tasks
-    piece's own export (read-only, `CHANGES_TASKS export`). {} when there's no tasks piece."""
+def tasks_export():
+    """The tasks piece's own export (read-only, `CHANGES_TASKS export`); {} when there's no tasks piece."""
     cmd = setting("CHANGES_TASKS", "loom tasks")
     try:
         r = subprocess.run([*shlex.split(cmd), "export"], capture_output=True, text=True, timeout=30, stdin=subprocess.DEVNULL)
         d = json.loads(r.stdout) if r.returncode == 0 else {}
     except (OSError, ValueError, subprocess.SubprocessError):
         return {}
+    return d if isinstance(d, dict) else {}
+
+
+def task_sources(d):
+    """{task id: cv-…} for the tasks made in a conversation (their source is conversation:cv-…; taskstore-core
+    it-ts-source, loom comms.md "Made here"). Only the id, nothing else of the task."""
+    out = {}
+    for t in (d.get("tasks") or []) if isinstance(d, dict) else []:
+        if isinstance(t, dict) and isinstance(t.get("id"), str):
+            m = re.fullmatch(r"conversation:(cv-[0-9a-f]{12})", t.get("source") or "")
+            if m:
+                out[t["id"]] = m.group(1)
+    return out
+
+
+def trusted_actors():
+    """Who a task comment may be by to vouch for a change: the household's agents (CHANGES_AGENTS' names) and the
+    owner as the tasks piece names them (CHANGES_TASK_OWNER)."""
+    agents = json_setting("CHANGES_AGENTS", {})
+    owner = setting("CHANGES_TASK_OWNER", "").strip()
+    return set(agents if isinstance(agents, dict) else []) | ({owner} if owner else set())
+
+
+def trusted_index(change_ids, d):
+    """{change id: [task id]} for the citations that may say where a change came from (loom comms.md, "Made here"):
+    a task's description (the store writes it), and its comments by an agent or the owner. A change's own text, and
+    anyone else's comment, never count: those are free text anyone with access can type."""
+    wanted, out, who = set(change_ids), {}, trusted_actors()
+    for t in (d.get("tasks") or []) if isinstance(d, dict) else []:
+        if not isinstance(t, dict) or not isinstance(t.get("id"), str):
+            continue
+        # A comment is {actor, at, text} (taskstore-core it-ts-annotate); an agent comments as its loom name.
+        text = "\n".join([t.get("description") or ""] + [c.get("text") or "" for c in t.get("comments") or []
+                                                        if isinstance(c, dict) and c.get("actor") in who])
+        for cid in set(citations(text)) & wanted:
+            out.setdefault(cid, []).append(t["id"])
+    return out
+
+
+def conversation_of(c, snap):
+    """The conversation a change was made in, or None: only through a task that vouches for it (trusted_index) and
+    whose source, which only an agent's own taskstore write sets, names a conversation. Nothing on the forge counts."""
+    sources = (snap or {}).get("sources") or {}
+    return next((sources[t] for t in ((snap or {}).get("trusted") or {}).get(c["id"], []) if t in sources), None)
+
+
+def tasks_index(change_ids, d=None):
+    """{change id: [{id, title, status}]} for the tasks whose description or comments cite a change, from the tasks
+    piece's own export (read-only, `CHANGES_TASKS export`). {} when there's no tasks piece."""
+    d = tasks_export() if d is None else d
     wanted, out = set(change_ids), {}
     for t in (d.get("tasks") or []) if isinstance(d, dict) else []:
         if not isinstance(t, dict) or not isinstance(t.get("id"), str):
@@ -560,6 +612,10 @@ def change_page(req, snap, c):
     elif cls == "you" and rules is None and is_owner(req):
         top.append({"type": "text", "tone": "muted", "text": "The approvals piece didn't answer, so this can't be said yes to right now."})
     sections.append({"id": "state", "blocks": top})
+    cv = conversation_of(c, snap)
+    if cv:
+        # loom draws it: only the thread's own member sees its title and a link (loom comms.md, "From").
+        sections.append({"id": "from", "place": "side", "blocks": [{"type": "from", "conversation": cv}]})
     ch = c["checks"]
     kv = [{"label": "Repo", "value": c["repo"].split(":", 1)[1]},
           {"label": "Branch", "value": f"{c['head']['ref']} into {c['base']['ref']}"},
@@ -673,6 +729,8 @@ def project_feed(args):
         # Before loom passes --repo, the card's own repos, as the snapshot read them.
         names = [args.get("project")] + args.get("name", [])
         repos = next((p["repos"] for p in snap["projects"] if p["slug"] in names), [])
+    # --conversation (the project's Comms threads, loom comms.md "Project hubs") is accepted and adds nothing: a change
+    # made in a thread counts only from a repo the project already names, and those are all listed here already.
     mine = [c for c in snap["changes"] if c["repo"] in repos]
     rules = rules_for([c for c in mine if c["state"] == "open"])
     groups = {}
@@ -693,15 +751,89 @@ def project_feed(args):
     return {"groups": out[:8]}
 
 
+# ---------------------------------------------------------------- a Comms thread's section (loom docs/specs/comms.md)
+
+# The Words that read as a problem in a thread's panel (its "bad" tone).
+PROBLEM_WORDS = ("CI red", "Conflicts", "Changes asked for", "Can't be merged")
+
+
+def thread_item(c, rules, made):
+    cls, words = waits_on(c, rules)
+    title = f"{short(c)} {c['title']}"
+    if len(title) > 200:
+        title = title[:199].rsplit(" ", 1)[0] + "…"
+    tone = "bad" if words in PROBLEM_WORDS else "warn" if cls == "you" else "ok" if c["state"] == "merged" else None
+    it = {"title": title, "ref": c["id"][:200], "status": words[:24], "when": iso(parse(c["updated"]) or now()), "page": c["page"]}
+    if tone:
+        it["tone"] = tone
+    if made:
+        it["made"] = True
+    return it
+
+
+def thread_feed(args):
+    """A Comms thread's changes (loom comms.md, "The thread feed"): each change ref it names, from the snapshot, and
+    every change made in its conversation, marked made. A ref the snapshot doesn't hold is "Not tracked", opening on
+    GitHub. At most 50 items, made ones first."""
+    cv = args.get("conversation")
+    snap = load() or {"changes": []}
+    by_id = {c["id"]: c for c in snap["changes"]}
+    made = [c for c in snap["changes"] if conversation_of(c, snap) == cv]
+    # A ref as the thread wrote it (Acme/App#2) is the snapshot's id once normalised, as citations are (repo_id).
+    named = []
+    for r in args.get("ref", []):
+        m = re.fullmatch(r"github:([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)#([1-9][0-9]{0,9})", r)
+        if m:
+            try:
+                rid = f"{forges.repo_id('github:' + m.group(1))}#{m.group(2)}"
+            except ValueError:
+                continue
+            if rid not in named:
+                named.append(rid)
+    rules = rules_for([c for c in made + [by_id[r] for r in named if r in by_id] if c["state"] == "open"])
+    out, seen = [], set()
+    for c in sorted(made, key=lambda c: -(parse(c["updated"]) or now()).timestamp()):
+        out.append(thread_item(c, rules, True))
+        seen.add(c["id"])
+    for r in named:
+        if r in seen:
+            continue
+        seen.add(r)
+        if r in by_id:
+            out.append(thread_item(by_id[r], rules, False))
+        else:
+            loc, n = r[len("github:"):].rsplit("#", 1)
+            out.append({"title": f"{loc}#{n}"[:200], "ref": r[:200], "status": "Not tracked",
+                        "href": f"https://github.com/{loc}/issues/{n}"})
+    return {"items": out[:50]}
+
+
+def thread_args(argv):
+    out = {"ref": []}
+    i = 0
+    while i < len(argv):
+        a = argv[i]
+        if a == "--conversation" and i + 1 < len(argv):
+            out["conversation"] = argv[i + 1]
+            i += 2
+        elif a == "--ref" and i + 1 < len(argv):
+            if len(out["ref"]) < 200:
+                out["ref"].append(argv[i + 1])
+            i += 2
+        else:
+            i += 1
+    return out
+
+
 def feed_args(argv):
-    out = {"name": [], "venue": [], "repo": []}
+    out = {"name": [], "venue": [], "repo": [], "conversation": []}
     i = 0
     while i < len(argv):
         a = argv[i]
         if a in ("--project", "--since", "--epic") and i + 1 < len(argv):
             out[a[2:]] = argv[i + 1]
             i += 2
-        elif a in ("--name", "--venue", "--repo") and i + 1 < len(argv):
+        elif a in ("--name", "--venue", "--repo", "--conversation") and i + 1 < len(argv):
             out[a[2:]].append(argv[i + 1])
             i += 2
         else:
@@ -718,6 +850,7 @@ USAGE = """loom-changes: what's waiting to go up, across the forges your project
     loom-changes list                   the open changes, from the snapshot
     loom-changes cited-by t-123 --json  the changes that cite a task
     loom-changes project-feed --json --project SLUG --since ISO [--repo R]…   the hub's section
+    loom-changes thread-feed --json --conversation CV [--ref R]…              a Comms thread's changes
 
 loom's verbs: ui --json, ui page --json, ui act --json.
 """
@@ -740,6 +873,12 @@ def main(argv=None):
         return
     if args[:1] == ["project-feed"]:
         print(json.dumps(project_feed(feed_args(args[1:]))))
+        return
+    if args[:1] == ["thread-feed"]:
+        a = thread_args(args[1:])
+        if not re.fullmatch(r"cv-[0-9a-f]{12}", a.get("conversation") or ""):
+            sys.exit("loom-changes: thread-feed --conversation cv-… [--ref github:owner/repo#n]…")
+        print(json.dumps(thread_feed(a)))
         return
     if args[:1] == ["cited-by"]:
         t = next((a for a in args[1:] if a != "--json"), "")

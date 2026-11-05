@@ -1,6 +1,6 @@
 {
   "name": "loom-changes",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "loom's Changes piece: what's waiting to go up across the forges a household's projects live on, read-only, with the owner's Yes for the merges a rule says to ask about",
   "bin": {
@@ -28,13 +28,15 @@
       { "name": "CHANGES_OWNER_LOGINS", "label": "Your own forge logins", "hint": "JSON, like [\"octocat\"]: your own changes read as yours" },
       { "name": "CHANGES_PROJECTS", "label": "How to list projects", "hint": "a command that prints project cards as JSON", "default": "loom project list --json" },
       { "name": "CHANGES_TASKS", "label": "How to read tasks", "hint": "the tasks piece's command; its export is read for citations", "default": "loom tasks" },
+      { "name": "CHANGES_TASK_OWNER", "label": "Your name in tasks", "hint": "the tasks piece's name for you (its TASKSTORE_OWNER): your task comments citing a change say where it came from" },
       { "name": "CHANGES_GH", "label": "The gh command", "hint": "a path to the GitHub CLI, if gh on PATH isn't the plain one" }
     ],
     "services": [
       { "name": "sync", "argv": ["loom-changes", "sync"] }
     ],
     "sections": {
-      "project": { "label": "Changes", "argv": ["loom-changes", "project-feed", "--json"] }
+      "project": { "label": "Changes", "argv": ["loom-changes", "project-feed", "--json"] },
+      "thread": { "label": "Changes", "argv": ["loom-changes", "thread-feed", "--json"] }
     }
   }
 }

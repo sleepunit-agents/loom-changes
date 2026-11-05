@@ -430,5 +430,117 @@ class Feed(Env):
         self.assertTrue(all(len(i["status"]) <= 24 for i in items))
 
 
+CV = "cv-0123456789ab"
+
+
+class Thread(Env):
+    """A Comms thread's changes (loom comms.md, "Work in this thread", criterion 25). Made here comes only from a task
+    that vouches for the change (its description, or a comment by an agent or the owner) and whose source is the
+    thread's conversation."""
+
+    def setUp(self):
+        super().setUp()
+        self.tasks = Path(self.td.name) / "tasks.json"
+        d = json.loads(self.tasks.read_text())
+        d["tasks"] += [
+            {"id": "t-2", "title": "Fix the failing one", "status": "open", "source": f"conversation:{CV}",
+             "description": "The fix is acme/app#2.", "comments": []},
+            {"id": "t-3", "title": "Elsewhere", "status": "open", "source": "conversation:cv-ba9876543210",
+             "description": "acme/app#3", "comments": []},
+            {"id": "t-4", "title": "Commented", "status": "open", "source": f"conversation:{CV}", "description": "",
+             "comments": [{"actor": "gabe", "text": "this is acme/app#7"}, {"actor": "ada", "text": "opened acme/app#8"}]},
+        ]
+        self.tasks.write_text(json.dumps(d))
+        self.sync()
+
+    def rewrite(self, n, **kw):
+        snap = app.load()
+        for c in snap["changes"]:
+            if c["number"] == n:
+                c.update(kw)
+        app.write_private(Path(self.env["CHANGES_DIR"]) / "snapshot.json", json.dumps(snap))
+
+    def feed(self, *refs):
+        return app.thread_feed(app.thread_args(["--json", "--conversation", CV, *sum((["--ref", r] for r in refs), [])]))
+
+    def test_named_and_made_with_their_state(self):
+        f = self.feed("github:acme/app#20", "github:acme/app#999", "github:acme/app#2", "t-12", "note:pond/plan")
+        by = {i["ref"]: i for i in f["items"]}
+        # Made here: #2 (t-2's description cites it) and #8 (an agent's comment on t-4). Not #3 (t-3 is another's).
+        self.assertTrue(by["github:acme/app#2"]["made"])
+        self.assertEqual((by["github:acme/app#2"]["status"], by["github:acme/app#2"]["tone"]), ("CI red", "bad"))
+        self.assertTrue(by["github:acme/app#8"]["made"])
+        self.assertNotIn("github:acme/app#3", by)
+        self.assertEqual((by["github:acme/app#20"]["status"], by["github:acme/app#20"]["tone"]), ("Merged", "ok"))
+        self.assertNotIn("made", by["github:acme/app#20"])
+        self.assertEqual(by["github:acme/app#999"], {"title": "acme/app#999", "ref": "github:acme/app#999", "status": "Not tracked",
+                                                     "href": "https://github.com/acme/app/issues/999"})
+        self.assertFalse(any(not r.startswith("github:") for r in by))
+        self.assertEqual([i["ref"] for i in f["items"]][-2:], ["github:acme/app#20", "github:acme/app#999"])
+        for i in f["items"]:
+            self.assertTrue(set(i) <= {"title", "ref", "status", "tone", "when", "page", "href", "made"})
+            self.assertLessEqual(len(i["status"]), 24)
+            self.assertFalse("page" in i and "href" in i)
+
+    def test_a_cv_id_in_a_changes_own_text_never_attributes_it_whoever_wrote_it(self):
+        # #6 is ada's (an agent) in a project repo; #11 is Gabe's. Title, body and branch all carry the cv- id.
+        for n in (6, 11):
+            self.rewrite(n, title=f"From {CV}", body=f"made in {CV}", head={"ref": f"ada/{CV}", "id": SHA(n)})
+            self.assertIsNone(app.conversation_of(self.change(n), app.load()))
+        by = {i["ref"]: i for i in self.feed("github:acme/app#6", "github:acme/app#11")["items"]}
+        self.assertNotIn("made", by["github:acme/app#6"])
+        self.assertNotIn("made", by["github:acme/app#11"])
+
+    def test_a_change_citing_a_made_task_is_linked_not_attributed(self):
+        # #5's own text cites t-5... give a made task t-5 that never cites #5 back: linked only.
+        d = json.loads(self.tasks.read_text())
+        d["tasks"].append({"id": "t-5", "title": "Five", "status": "open", "source": f"conversation:{CV}", "description": "", "comments": []})
+        self.tasks.write_text(json.dumps(d))
+        self.sync()
+        self.assertIn("t-5", app.tasks_cited(self.change(5)))
+        self.assertIsNone(app.conversation_of(self.change(5), app.load()))
+
+    def test_a_comment_by_someone_who_isnt_an_agent_doesnt_attribute(self):
+        self.assertIsNone(app.conversation_of(self.change(7), app.load()))
+        self.assertEqual(app.conversation_of(self.change(8), app.load()), CV)
+
+    def test_the_owners_comment_counts_once_named(self):
+        d = json.loads(self.tasks.read_text())
+        next(t for t in d["tasks"] if t["id"] == "t-4")["comments"].append({"actor": "olive", "text": "and acme/app#9"})
+        self.tasks.write_text(json.dumps(d))
+        self.sync()
+        self.assertIsNone(app.conversation_of(self.change(9), app.load()))
+        with mock.patch.dict(os.environ, {"CHANGES_TASK_OWNER": "olive"}):
+            self.sync()
+        self.assertEqual(app.conversation_of(self.change(9), app.load()), CV)
+
+    def test_a_ref_as_written_finds_the_snapshots_change_once(self):
+        by = [i for i in self.feed("github:Acme/App#2", "github:acme/app#2")["items"] if i["ref"] == "github:acme/app#2"]
+        self.assertEqual(len(by), 1)
+        self.assertEqual(by[0]["status"], "CI red")
+
+    def test_caps_hold_against_data_that_would_break_them(self):
+        snap = app.load()
+        base = self.change(1)
+        snap["changes"] = [dict(base, number=100 + i, id=f"github:acme/app#{100 + i}", page=f"c/github/acme/app/{100 + i}",
+                                title="word " * 80, head={"ref": "x", "id": SHA(100 + i)}) for i in range(60)]
+        snap["trusted"] = {c["id"]: ["t-2"] for c in snap["changes"]}
+        app.write_private(Path(self.env["CHANGES_DIR"]) / "snapshot.json", json.dumps(snap))
+        items = self.feed()["items"]
+        self.assertEqual(len(items), 50)
+        self.assertTrue(all(i["made"] and len(i["title"]) <= 200 and i["title"].endswith("…") for i in items))
+
+    def test_a_change_page_says_where_it_came_from(self):
+        page = app.ui_page({"path": self.change(2)["page"], "caller": OWNER})
+        self.assertIn({"id": "from", "place": "side", "blocks": [{"type": "from", "conversation": CV}]}, page["sections"])
+        other = app.ui_page({"path": self.change(1)["page"], "caller": OWNER})
+        self.assertFalse(any(s["id"] == "from" for s in other["sections"]))
+
+    def test_the_hub_takes_only_the_projects_own_repos(self):
+        self.assertEqual(app.project_feed(app.feed_args(["--project", "nope", "--conversation", CV]))["groups"], [])
+        f = app.project_feed(app.feed_args(["--project", "app", "--repo", "github:acme/app", "--conversation", CV]))
+        self.assertIn("github:acme/app#2", [i["ref"] for g in f["groups"] for i in g["items"]])
+
+
 if __name__ == "__main__":
     unittest.main()
