@@ -331,6 +331,21 @@ class Actions(Env):
         rule = json.loads(self.ap_calls()[2]["stdin"])
         self.assertEqual(rule, {"action": "rule", "fields": {"kind": "merge", "scope": "project:app", "tier": "do"}, "caller": OWNER})
 
+    def test_approvals_runs_as_itself_never_with_this_pieces_home(self):
+        # The parent has this piece's home and name, its CHANGES_* settings (Env sets CHANGES_DIR and more), and loom's
+        # own LOOM_HOME: the child gets LOOM_HOME and none of the rest.
+        self.assertTrue(any(k.startswith("CHANGES_") for k in os.environ))
+        with mock.patch.dict(os.environ, {"LOOM_PIECE_HOME": "/somewhere/changes", "LOOM_PIECE_NAME": "changes", "LOOM_HOME": "/the/loom"}):
+            self.assertTrue(self.act("yes")["ok"])
+            app.rules_for([self.change(1)])
+        calls = self.ap_calls()
+        self.assertEqual([c["argv"][0] for c in calls], ["grant", "rule"])
+        for c in calls:
+            self.assertIsNone(c["piece_home"], c["argv"])
+            self.assertIsNone(c["piece_name"], c["argv"])
+            self.assertEqual(c["changes_env"], [], c["argv"])
+            self.assertEqual(c["loom_home"], "/the/loom", "everything else passes through")
+
     def test_refused_for_anyone_but_the_owner_and_for_a_stale_head(self):
         for c in ({"kind": "owner", "who": "sam", "agents": ["ada"]}, {"kind": "agent", "agent": "ada"}):
             for a in ("yes", "not-yet", "always", "refresh"):
