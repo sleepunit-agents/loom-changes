@@ -286,6 +286,18 @@ class Pages(Env):
             self.assertNotIn('"buttons"', json.dumps(page["changes"]["reader"]))
             self.assertIn("didn't answer", json.dumps(page))
 
+    def test_split_reader_keeps_authority_and_rule_verdict(self):
+        for tier in ("do", "tell", "ask"):
+            with mock.patch.dict(os.environ, {"FAKE_RULES": json.dumps({f"github:acme/app#1@{SHA(1)}": {"tier": tier}})}):
+                page = app.ui_page({"path": "c/github/acme/app/1", "caller": OWNER})
+                data = page["changes"]
+                self.assertEqual(data["selected"], "c/github/acme/app/1")
+                rule = next(s for s in data["reader"]["sections"] if s["id"] == "rule")
+                self.assertEqual(rule["blocks"][0]["text"], tier)
+                original = app.change_page({"caller": OWNER}, app.load(), self.change(1))
+                state = next(s for s in original["sections"] if s["id"] == "state")
+                self.assertEqual(data["reader"]["sections"][0], state)
+
     def test_a_reviewer_is_named_when_one_was_asked(self):
         row = app.row_of(self.change(7), {})[1]
         self.assertIn("needs review from Sam Lee, Core", row["meta"])
@@ -366,7 +378,7 @@ class Owner(Env):
     def test_no_caller_gets_no_buttons_and_no_action(self):
         self.sync()
         page = app.ui_page({"path": "c/github/acme/app/1"})
-        self.assertNotIn('"buttons"', json.dumps([s for s in page["sections"] if s["id"] == "state"]))
+        self.assertNotIn('"buttons"', json.dumps([s for s in page["changes"]["reader"]["sections"] if s["id"] == "state"]))
         r = app.ui_act({"action": "yes", "fields": {"id": "github:acme/app#1", "head": SHA(1)}})
         self.assertFalse(r["ok"])
         self.assertFalse(app.ui_act({"action": "yes", "caller": {"kind": "agent", "agent": "ada"},
@@ -526,9 +538,9 @@ class Thread(Env):
 
     def test_a_change_page_says_where_it_came_from(self):
         page = app.ui_page({"path": self.change(2)["page"], "caller": OWNER})
-        self.assertIn({"id": "from", "place": "side", "blocks": [{"type": "from", "conversation": CV}]}, page["sections"])
+        self.assertIn({"id": "from", "place": "side", "blocks": [{"type": "from", "conversation": CV}]}, page["changes"]["reader"]["sections"])
         other = app.ui_page({"path": self.change(1)["page"], "caller": OWNER})
-        self.assertFalse(any(s["id"] == "from" for s in other["sections"]))
+        self.assertFalse(any(s["id"] == "from" for s in other["changes"]["reader"]["sections"]))
 
     def test_the_hub_takes_only_the_projects_own_repos(self):
         self.assertEqual(app.project_feed(app.feed_args(["--project", "nope", "--conversation", CV]))["groups"], [])
