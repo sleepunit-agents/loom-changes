@@ -298,6 +298,16 @@ class Pages(Env):
                 state = next(s for s in original["sections"] if s["id"] == "state")
                 self.assertEqual(data["reader"]["sections"][0], state)
 
+    def test_lately_reads_the_real_rule_without_adding_actions(self):
+        c = self.change(20)
+        target = app.target_of(c)
+        with mock.patch.dict(os.environ, {"FAKE_RULES": json.dumps({target: {"tier": "do"}})}):
+            page = app.ui_page({"path": c["page"], "caller": OWNER})["changes"]["reader"]
+        rule = next(s for s in page["sections"] if s["id"] == "rule")
+        self.assertEqual(rule["blocks"][0]["text"], "do")
+        self.assertFalse(any(b["type"] == "buttons" for s in page["sections"] for b in s["blocks"]))
+        self.assertTrue(all(c["argv"][0] == "rule" for c in self.ap_calls()))
+
     def test_list_rule_outage_cannot_change_the_readers_buttons(self):
         target = f"github:acme/app#1@{SHA(1)}"
         with mock.patch.object(app, "rules_for", side_effect=[None, {target: {"tier": "ask"}}]):

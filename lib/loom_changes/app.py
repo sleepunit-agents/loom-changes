@@ -240,13 +240,14 @@ def approvals(argv, stdin=None, timeout=2.5):
     return r.stdout
 
 
-def rules_for(changes):
+def rules_for(changes, include_closed=False):
     """{target: {tier, scope?, approval?}} for every agent's open change, one approvals call per agent; None when the
-    approvals piece can't say (its buttons are then absent)."""
+    approvals piece can't say (its buttons are then absent). include_closed is only for the reader's displayed
+    verdict; action eligibility keeps the original open-change-only lookup."""
     by_agent = {}
     for c in changes:
         a = agent_of(c)
-        if a and c["state"] == "open" and re.fullmatch(r"[0-9a-f]{40}", c["head"]["id"]):
+        if a and (c["state"] == "open" or include_closed) and re.fullmatch(r"[0-9a-f]{40}", c["head"]["id"]):
             by_agent.setdefault(a, []).append(target_of(c))
     out = {}
     try:
@@ -613,9 +614,10 @@ def change_page(req, snap, c):
     elif cls == "you" and rules is None and is_owner(req):
         top.append({"type": "text", "tone": "muted", "text": "The approvals piece didn't answer, so this can't be said yes to right now."})
     sections.append({"id": "state", "blocks": top})
-    rule = (rules or {}).get(target_of(c)) or {}
+    verdicts = rules if c["state"] == "open" else rules_for([c], include_closed=True)
+    rule = (verdicts or {}).get(target_of(c)) or {}
     sections.append({"id": "rule", "title": "Standing rule", "blocks": [
-        {"type": "text", "text": rule.get("tier", "Unavailable" if rules is None else "ask")} ]})
+        {"type": "text", "text": rule.get("tier", "Unavailable" if verdicts is None else "ask")} ]})
     cv = conversation_of(c, snap)
     if cv:
         # loom draws it: only the thread's own member sees its title and a link (loom comms.md, "From").
