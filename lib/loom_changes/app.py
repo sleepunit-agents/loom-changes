@@ -535,11 +535,12 @@ def ui_manifest():
     return {"v": 2, "tab": tab, "tile": tile}
 
 
-def index_page(req, snap):
+def index_page(req, snap, rules=False):
     q = (req or {}).get("query") or {}
     cards = snap["projects"]
     only = q.get("project", "")
-    rules = rules_for([c for c in snap["changes"] if c["state"] == "open"])
+    if rules is False:
+        rules = rules_for([c for c in snap["changes"] if c["state"] == "open"])
     sections = []
     head = []
     note = stale_note(snap)
@@ -585,8 +586,9 @@ def index_page(req, snap):
             "sections": sections}
 
 
-def change_page(req, snap, c):
-    rules = rules_for([c]) if c["state"] == "open" else {}
+def change_page(req, snap, c, rules=False):
+    if rules is False:
+        rules = rules_for([c]) if c["state"] == "open" else {}
     cls, words = waits_on(c, rules)
     agent = agent_of(c)
     forge = forges.adapter_of(c["repo"])
@@ -650,6 +652,38 @@ def change_page(req, snap, c):
     return {"title": short(c), "intro": c["title"], "sections": sections}
 
 
+def split_page(req, snap, selected=None):
+    """The same snapshot and reader, arranged as groups/list/reader. No new authority."""
+    rules = rules_for([c for c in snap["changes"] if c["state"] == "open"])
+    result = index_page(req, snap, rules)
+    q = (req or {}).get("query") or {}
+    only = q.get("project", "")
+    repos = {r for p in snap["projects"] if not only or p["slug"] == only for r in p["repos"]}
+    rows = []
+    for c in sorted(snap["changes"], key=lambda c: sort_key(c, rules)):
+        if c["repo"] not in repos:
+            continue
+        group, words = waits_on(c, rules)
+        rows.append({"id": c["page"], "group": group, "title": c["title"], "repo": c["repo"].split(":", 1)[1],
+                     "number": str(c["number"]), "author": who_name(c["author"]), "ago": ago(c["updated"]),
+                     "status": state_line(c, words)})
+    opened = change_page(req, snap, selected, rules) if selected else None
+    if opened:
+        rule = (rules or {}).get(target_of(selected)) or {}
+        opened["sections"].insert(1, {"id": "rule", "title": "Standing rule", "blocks": [
+            {"type": "text", "text": rule.get("tier", "Unavailable" if rules is None else "ask")} ]})
+        for section in opened["sections"]:
+            if section["id"] == "body":
+                section.pop("fold", None)
+                section["title"] = "Summary"
+    result["changes"] = {"groups": [{"id": g, "label": GROUP[g]} for g in ORDER], "rows": rows[:500],
+                         "selected": selected["page"] if selected else "",
+                         "reader": opened}
+    # Keep the notices, project filter and refresh action from the existing page.
+    result["sections"] = result["sections"][:1]
+    return result
+
+
 def ui_page(req):
     path = (req or {}).get("path", "")
     snap = load()
@@ -660,9 +694,9 @@ def ui_page(req):
             {"type": "callout", "busy": True, "text": "Reading the repos your projects name for the first time…"},
             {"type": "buttons", "items": [{"action": "refresh", "label": "Refresh"}]}]}], "refresh": 10}
     if path == "":
-        return index_page(req, snap)
+        return split_page(req, snap)
     c = find(snap, path)
-    return change_page(req, snap, c) if c else {"title": "Not found", "sections": []}
+    return split_page(req, snap, c) if c else {"title": "Not found", "sections": []}
 
 
 def caller_who(req):

@@ -242,20 +242,13 @@ class Pages(Env):
 
     def test_index_groups_by_project_waiting_on_you_first(self):
         page = app.ui_page({"path": "", "caller": OWNER})
-        ids = [s["id"] for s in page["sections"]]
-        self.assertEqual(ids[:2], ["summary", "p-app"])
-        sec = page["sections"][1]
-        self.assertEqual(sec["tone"], "warn")
-        first = sec["blocks"][0]["items"]
-        self.assertTrue(all(i["tone"] == "warn" for i in first))
-        self.assertTrue(first[0]["text"].startswith("app#"))
-        lately = next(b for b in sec["blocks"] if b["type"] == "details")
-        self.assertEqual(lately["summary"], "Lately")
-        self.assertEqual([i["text"] for i in lately["blocks"][0]["items"]], ["app#20 Merged yesterday"])
-        order = [i["meta"] for b in sec["blocks"] if b["type"] == "list" for i in b["items"]]
-        self.assertIn("Checking for conflicts", " ".join(order))
-        # The project filter narrows; an unknown path is not found.
-        self.assertEqual([s["id"] for s in app.ui_page({"path": "", "query": {"project": "other"}})["sections"]], ["summary", "p-other"])
+        data = page["changes"]
+        self.assertEqual([g["id"] for g in data["groups"]], app.ORDER)
+        self.assertEqual(data["rows"][0]["group"], "you")
+        self.assertIn("Merged yesterday", [r["title"] for r in data["rows"] if r["group"] == "done"])
+        self.assertIn("Checking for conflicts", " ".join(r["status"] for r in data["rows"]))
+        other = app.ui_page({"path": "", "query": {"project": "other"}})["changes"]["rows"]
+        self.assertTrue(all(r["repo"] == "acme/other" for r in other))
         self.assertEqual(app.ui_page({"path": "c/github/acme/app/999"}), {"title": "Not found", "sections": []})
 
     def test_an_old_snapshot_says_how_old(self):
@@ -272,6 +265,7 @@ class Pages(Env):
     def buttons(self, n, rules="{}", caller=OWNER):
         with mock.patch.dict(os.environ, {"FAKE_RULES": rules}):
             page = app.ui_page({"path": f"c/github/acme/app/{n}", "caller": caller})
+        page = page["changes"]["reader"]
         return [i["label"] for s in page["sections"] for b in s["blocks"] if b["type"] == "buttons" for i in b["items"]], page
 
     def test_a_change_page_shows_buttons_only_when_it_waits_on_you(self):
@@ -289,8 +283,20 @@ class Pages(Env):
         for broken in ({"CHANGES_APPROVALS": "/no/such/approvals"}, {"FAKE_RULES": json.dumps({f"github:acme/app#1@{SHA(1)}": {"tier": "sure"}})}):
             with mock.patch.dict(os.environ, broken):
                 page = app.ui_page({"path": "c/github/acme/app/1", "caller": OWNER})
-            self.assertNotIn('"buttons"', json.dumps(page))
+            self.assertNotIn('"buttons"', json.dumps(page["changes"]["reader"]))
             self.assertIn("didn't answer", json.dumps(page))
+
+    def test_split_reader_keeps_authority_and_rule_verdict(self):
+        for tier in ("do", "tell", "ask"):
+            with mock.patch.dict(os.environ, {"FAKE_RULES": json.dumps({f"github:acme/app#1@{SHA(1)}": {"tier": tier}})}):
+                page = app.ui_page({"path": "c/github/acme/app/1", "caller": OWNER})
+                data = page["changes"]
+                self.assertEqual(data["selected"], "c/github/acme/app/1")
+                rule = next(s for s in data["reader"]["sections"] if s["id"] == "rule")
+                self.assertEqual(rule["blocks"][0]["text"], tier)
+                original = app.change_page({"caller": OWNER}, app.load(), self.change(1))
+                state = next(s for s in original["sections"] if s["id"] == "state")
+                self.assertEqual(data["reader"]["sections"][0], state)
 
     def test_a_reviewer_is_named_when_one_was_asked(self):
         row = app.row_of(self.change(7), {})[1]
@@ -302,7 +308,7 @@ class Pages(Env):
         c = dict(self.change(1), title="at-12 and (t-12) and t-12x", body="", head={"ref": "x/t-30-fix", "id": SHA(1)})
         self.assertEqual(app.tasks_cited(c), ["t-12", "t-30"])
         page = app.ui_page({"path": "c/github/acme/app/1"})
-        tasks = next(s for s in page["sections"] if s["id"] == "tasks")["blocks"][0]["items"]
+        tasks = next(s for s in page["changes"]["reader"]["sections"] if s["id"] == "tasks")["blocks"][0]["items"]
         self.assertEqual([(t["meta"].split(" ")[0], t["page"]) for t in tasks],
                          [("t-1", "loom:p/tasks/task/t-1"), ("t-900", "loom:p/tasks/task/t-900")])
         self.assertEqual(app.load()["citing"], {"github:acme/app#1": [{"id": "t-900", "title": "Ship the thing", "status": "open"}],
@@ -372,7 +378,7 @@ class Owner(Env):
     def test_no_caller_gets_no_buttons_and_no_action(self):
         self.sync()
         page = app.ui_page({"path": "c/github/acme/app/1"})
-        self.assertNotIn('"buttons"', json.dumps([s for s in page["sections"] if s["id"] == "state"]))
+        self.assertNotIn('"buttons"', json.dumps([s for s in page["changes"]["reader"]["sections"] if s["id"] == "state"]))
         r = app.ui_act({"action": "yes", "fields": {"id": "github:acme/app#1", "head": SHA(1)}})
         self.assertFalse(r["ok"])
         self.assertFalse(app.ui_act({"action": "yes", "caller": {"kind": "agent", "agent": "ada"},
@@ -532,9 +538,9 @@ class Thread(Env):
 
     def test_a_change_page_says_where_it_came_from(self):
         page = app.ui_page({"path": self.change(2)["page"], "caller": OWNER})
-        self.assertIn({"id": "from", "place": "side", "blocks": [{"type": "from", "conversation": CV}]}, page["sections"])
+        self.assertIn({"id": "from", "place": "side", "blocks": [{"type": "from", "conversation": CV}]}, page["changes"]["reader"]["sections"])
         other = app.ui_page({"path": self.change(1)["page"], "caller": OWNER})
-        self.assertFalse(any(s["id"] == "from" for s in other["sections"]))
+        self.assertFalse(any(s["id"] == "from" for s in other["changes"]["reader"]["sections"]))
 
     def test_the_hub_takes_only_the_projects_own_repos(self):
         self.assertEqual(app.project_feed(app.feed_args(["--project", "nope", "--conversation", CV]))["groups"], [])
