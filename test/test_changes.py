@@ -298,6 +298,14 @@ class Pages(Env):
                 state = next(s for s in original["sections"] if s["id"] == "state")
                 self.assertEqual(data["reader"]["sections"][0], state)
 
+    def test_list_rule_outage_cannot_change_the_readers_buttons(self):
+        target = f"github:acme/app#1@{SHA(1)}"
+        with mock.patch.object(app, "rules_for", side_effect=[None, {target: {"tier": "ask"}}]):
+            page = app.ui_page({"path": "c/github/acme/app/1", "caller": OWNER})
+        reader = page["changes"]["reader"]
+        labels = [i["label"] for s in reader["sections"] for b in s["blocks"] if b["type"] == "buttons" for i in b["items"]]
+        self.assertEqual(labels, ["Yes, merge it", "Not yet", "Always for The App"])
+
     def test_a_reviewer_is_named_when_one_was_asked(self):
         row = app.row_of(self.change(7), {})[1]
         self.assertIn("needs review from Sam Lee, Core", row["meta"])
@@ -383,7 +391,7 @@ class Owner(Env):
         self.assertFalse(r["ok"])
         self.assertFalse(app.ui_act({"action": "yes", "caller": {"kind": "agent", "agent": "ada"},
                                      "fields": {"id": "github:acme/app#1", "head": SHA(1)}})["ok"])
-        self.assertEqual([c["argv"][0] for c in self.ap_calls()], ["rule"], "the page's read only: no grant, no rule set")
+        self.assertEqual([c["argv"][0] for c in self.ap_calls()], ["rule", "rule"], "list and reader read rules only: no grant, no rule set")
 
     def test_the_api_is_refused_with_or_without_a_caller(self):
         import io

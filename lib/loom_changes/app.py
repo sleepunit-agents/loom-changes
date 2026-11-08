@@ -586,9 +586,8 @@ def index_page(req, snap, rules=False):
             "sections": sections}
 
 
-def change_page(req, snap, c, rules=False):
-    if rules is False:
-        rules = rules_for([c]) if c["state"] == "open" else {}
+def change_page(req, snap, c):
+    rules = rules_for([c]) if c["state"] == "open" else {}
     cls, words = waits_on(c, rules)
     agent = agent_of(c)
     forge = forges.adapter_of(c["repo"])
@@ -614,6 +613,9 @@ def change_page(req, snap, c, rules=False):
     elif cls == "you" and rules is None and is_owner(req):
         top.append({"type": "text", "tone": "muted", "text": "The approvals piece didn't answer, so this can't be said yes to right now."})
     sections.append({"id": "state", "blocks": top})
+    rule = (rules or {}).get(target_of(c)) or {}
+    sections.append({"id": "rule", "title": "Standing rule", "blocks": [
+        {"type": "text", "text": rule.get("tier", "Unavailable" if rules is None else "ask")} ]})
     cv = conversation_of(c, snap)
     if cv:
         # loom draws it: only the thread's own member sees its title and a link (loom comms.md, "From").
@@ -667,11 +669,8 @@ def split_page(req, snap, selected=None):
         rows.append({"id": c["page"], "group": group, "title": c["title"], "repo": c["repo"].split(":", 1)[1],
                      "number": str(c["number"]), "author": who_name(c["author"]), "ago": ago(c["updated"]),
                      "status": state_line(c, words)})
-    opened = change_page(req, snap, selected, rules) if selected else None
+    opened = change_page(req, snap, selected) if selected else None
     if opened:
-        rule = (rules or {}).get(target_of(selected)) or {}
-        opened["sections"].insert(1, {"id": "rule", "title": "Standing rule", "blocks": [
-            {"type": "text", "text": rule.get("tier", "Unavailable" if rules is None else "ask")} ]})
         for section in opened["sections"]:
             if section["id"] == "body":
                 section.pop("fold", None)
