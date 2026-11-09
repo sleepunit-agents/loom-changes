@@ -128,7 +128,11 @@ None holds a secret.
   yet are `approvals grant --kind merge --target <id>@<head> --for <agent>
   --by <member> [--deny]`. Always is the approvals piece's own `rule` action,
   for `project:<slug>`, then the same grant. Without the approvals piece the
-  buttons are absent, and the page says why.
+  buttons are absent, and the page says why. A merge the agent asked for
+  someone else (the approvals answer's `asked_for`, t-1956) waits on the owner
+  whatever his own rule says: the page reads "Waiting on you, for Loren", has
+  no Always, and Yes and Not yet add `--person <slug>`, so they answer that
+  person's card. The person is checked against approvals again when acted on.
 - **A project's hub.** `sections.project` answers the hub's Changes section:
   a group per who it waits on, with "Waiting on you" marked `waiting`, so
   loom counts it on the Projects index.

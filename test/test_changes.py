@@ -336,6 +336,8 @@ class Pages(Env):
 
 
 class Actions(Env):
+    buttons = Pages.buttons
+
     def setUp(self):
         super().setUp()
         self.sync()
@@ -354,6 +356,32 @@ class Actions(Env):
         self.assertEqual(calls, [grant, grant + ["--deny"], ["ui", "act", "--json"], grant])
         rule = json.loads(self.ap_calls()[2]["stdin"])
         self.assertEqual(rule, {"action": "rule", "fields": {"kind": "merge", "scope": "project:app", "tier": "do"}, "caller": OWNER})
+
+    def test_a_merge_asked_for_someone_else_says_whom_and_its_yes_is_for_them(self):
+        # t-1956: Ada asked to merge app#1 for Loren. The owner's own rule (do) doesn't answer that, so the page waits on
+        # him, says whom it's for, has no Always (his own rule), and Yes and Not yet answer Loren's card (--person).
+        t = f"github:acme/app#1@{SHA(1)}"
+        rules = json.dumps({t: {"tier": "do", "asked_for": [{"for": "loren", "name": "Loren", "id": "a-0000beef"}]}})
+        labels, page = self.buttons(1, rules)
+        self.assertEqual(labels, ["Yes, merge it", "Not yet"])
+        self.assertIn("Waiting on you, for Loren", json.dumps(page))
+        self.assertIn("asked to merge this for Loren", json.dumps(page))
+        items = [i for s in page["sections"] for b in s["blocks"] if b["type"] == "buttons" for i in b["items"]]
+        self.assertEqual({i["fields"]["person"] for i in items}, {"loren"})
+        with mock.patch.dict(os.environ, {"FAKE_RULES": rules}):
+            r = app.ui_act({"action": "yes", "caller": OWNER, "fields": {"id": "github:acme/app#1", "head": SHA(1), "person": "loren"}})
+            self.assertTrue(r["ok"], r)
+            self.assertIn("for Loren", r["message"])
+            # A person the agent didn't ask for, or Always with one, is refused before approvals is told anything.
+            for bad in ({"person": "dan"}, {"person": "loren", "_always": 1}):
+                act = "always" if "_always" in bad else "yes"
+                r = app.ui_act({"action": act, "caller": OWNER, "fields": {"id": "github:acme/app#1", "head": SHA(1), "person": bad["person"]}})
+                self.assertFalse(r["ok"])
+        grants = [c["argv"] for c in self.ap_calls() if c["argv"][0] == "grant"]
+        self.assertEqual(grants, [["grant", "--kind", "merge", "--target", t, "--for", "ada", "--by", "olive-owner", "--person", "loren"]])
+        # Once answered (no one else waiting), the page is the owner's own rule again.
+        labels, page = self.buttons(1, json.dumps({t: {"tier": "do"}}))
+        self.assertEqual(labels, [])
 
     def test_approvals_runs_as_itself_never_with_this_pieces_home(self):
         # The parent has this piece's home and name, its CHANGES_* settings (Env sets CHANGES_DIR and more), and loom's
