@@ -379,7 +379,18 @@ class Actions(Env):
                 self.assertFalse(r["ok"])
         grants = [c["argv"] for c in self.ap_calls() if c["argv"][0] == "grant"]
         self.assertEqual(grants, [["grant", "--kind", "merge", "--target", t, "--for", "ada", "--by", "olive-owner", "--person", "loren"]])
-        # Once answered (no one else waiting), the page is the owner's own rule again.
+        # The standing rule says it's for his own work.
+        self.assertIn("this one was asked for Loren", json.dumps(page))
+        # Allowed for her, not yet merged: no buttons, says he said yes for her (never "Waiting on you" again).
+        allowed = json.dumps({t: {"tier": "ask", "asked_for": [{"for": "loren", "name": "Loren", "id": "a-0000beef", "state": "allowed"}]}})
+        labels, page = self.buttons(1, allowed)
+        self.assertEqual(labels, [])
+        self.assertIn("You said yes for Loren", json.dumps(page))
+        # Junk where the list goes: read as none, never an error.
+        for junk in (5, "loren", [5], [{"for": "Not A Slug"}], [{"for": "loren", "state": "used"}]):
+            labels, _ = self.buttons(1, json.dumps({t: {"tier": "ask", "asked_for": junk}}))
+            self.assertEqual(labels, ["Yes, merge it", "Not yet", "Always for The App"], junk)
+        # Once spent (no one else listed), the page is the owner's own rule again.
         labels, page = self.buttons(1, json.dumps({t: {"tier": "do"}}))
         self.assertEqual(labels, [])
 

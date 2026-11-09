@@ -263,10 +263,13 @@ def rules_for(changes, include_closed=False):
                     ap = r.get("approval")
                     # Someone else's merge (t-1956): a card the agent asked for another person waits on the owner even
                     # where his own rule says do, and his yes answers it only for that person (--person).
-                    others = [x for x in (r.get("asked_for") or []) if isinstance(x, dict) and isinstance(x.get("for"), str)
-                              and re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", x["for"]) and len(x["for"]) <= 80]
+                    af = r.get("asked_for")
+                    others = [x for x in (af if isinstance(af, list) else []) if isinstance(x, dict) and isinstance(x.get("for"), str)
+                              and re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", x["for"]) and len(x["for"]) <= 80
+                              and x.get("state", "pending") in ("pending", "allowed")]
                     out[t] = {"tier": r["tier"], **({"approval": ap} if isinstance(ap, dict) and isinstance(ap.get("state"), str) else {}),
-                              **({"for": {"slug": others[0]["for"], "name": str(others[0].get("name") or others[0]["for"])[:40]}} if others else {})}
+                              **({"for": {"slug": others[0]["for"], "name": str(others[0].get("name") or others[0]["for"])[:40],
+                                          "state": others[0].get("state", "pending")}} if others else {})}
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
         return None
     return out
@@ -311,6 +314,8 @@ def waits_on(c, rules):
         return "author", "Yours" if is_owners(c) else "Ready"
     r = (rules or {}).get(target_of(c)) or {"tier": "ask"}
     if r.get("for"):
+        if r["for"]["state"] == "allowed":
+            return "agent", f"You said yes for {r['for']['name']}; ready for {name_of(agent)} to merge"
         return "you", f"Waiting on you, for {r['for']['name']}"
     ap = r.get("approval") or {}
     if r["tier"] == "ask" and ap.get("state") != "allowed":
@@ -624,15 +629,20 @@ def change_page(req, snap, c):
                 "confirm": f"From now on {name_of(agent)} merges {proj['name']}'s changes once they're green, without asking."}] if proj else [])]})
     elif cls == "agent" and agent:
         r = (rules or {}).get(target_of(c)) or {}
-        top.append({"type": "text", "tone": "muted", "text": (f"{name_of(agent)} merges this on its own once it's green" if r.get("tier") in ("do", "tell")
-                                                              else f"You said yes; {name_of(agent)} merges it") + "."})
+        if r.get("for"):
+            top.append({"type": "text", "tone": "muted", "text": f"You said yes for {r['for']['name']}; {name_of(agent)} merges it for them."})
+        else:
+            top.append({"type": "text", "tone": "muted", "text": (f"{name_of(agent)} merges this on its own once it's green" if r.get("tier") in ("do", "tell")
+                                                                  else f"You said yes; {name_of(agent)} merges it") + "."})
     elif cls == "you" and rules is None and is_owner(req):
         top.append({"type": "text", "tone": "muted", "text": "The approvals piece didn't answer, so this can't be said yes to right now."})
     sections.append({"id": "state", "blocks": top})
     verdicts = rules if c["state"] == "open" else rules_for([c], include_closed=True)
     rule = (verdicts or {}).get(target_of(c)) or {}
     sections.append({"id": "rule", "title": "Standing rule", "blocks": [
-        {"type": "text", "text": rule.get("tier", "Unavailable" if verdicts is None else "ask")} ]})
+        {"type": "text", "text": rule.get("tier", "Unavailable" if verdicts is None else "ask")},
+        # Your rule is for your own work (t-1956): someone else's merge is asked about whatever it says.
+        *([{"type": "text", "tone": "muted", "text": f"That's for your own work; this one was asked for {rule['for']['name']}."}] if rule.get("for") else [])]})
     cv = conversation_of(c, snap)
     if cv:
         # loom draws it: only the thread's own member sees its title and a link (loom comms.md, "From").
@@ -746,7 +756,7 @@ def ui_act(req):
     if person:
         # Only someone the agent asked for, as approvals says now (t-1956): never a name the page was handed.
         whose = ((rules_for([c]) or {}).get(target_of(c)) or {}).get("for")
-        if action == "always" or not whose or whose["slug"] != person:
+        if action == "always" or not whose or whose["slug"] != person or whose["state"] != "pending":
             return {"ok": False, "message": "That's no longer waiting for that person; look again.", "page": back}
     grant = ["grant", "--kind", "merge", "--target", target_of(c), "--for", agent] + (["--by", by] if by else []) + (["--person", person] if person else [])
     try:
