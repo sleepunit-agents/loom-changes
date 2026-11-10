@@ -16,7 +16,7 @@ from unittest import mock
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "lib"))
 
-from loom_changes import app, forges  # noqa: E402
+from loom_changes import app, collections, forges  # noqa: E402
 from loom_changes.forges import github  # noqa: E402
 
 FIXTURE = HERE / "fixtures" / "github-list.json"
@@ -607,3 +607,87 @@ class Thread(Env):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Collections(Env):
+    """The shared collection, changes/change (loom collections.md; t-2029): the snapshot's changes as records, for loom
+    and household owners only, filtered before paging, keyset pages, only the fields asked for."""
+    OWNER_V = {"kind": "member", "household": True}
+
+    def setUp(self):
+        super().setUp()
+        self.snap = self.sync()
+        self.recs = collections.records(self.snap, app.agent_of, app.is_owners)
+
+    def q(self, **o):
+        return {"id": "q", "type": "change", "version": 1, "where": [], "order": [], "limit": 500, "after": None,
+                "fields": list(collections.TYPE["default_fields"]), **o}
+
+    def rows(self, viewer, *queries):
+        return [json.loads(l) for l in collections.answer({"viewer": viewer, "queries": list(queries)}, self.recs)]
+
+    def test_declares_in_package_json_exactly_what_it_answers(self):
+        pkg = json.loads((HERE.parent / "package.json").read_text())
+        self.assertEqual(pkg["loom"]["collections"], collections.DECLARATION)
+
+    def test_every_change_once_as_its_record_in_loom_grammar(self):
+        ids = [c["id"] for c in self.snap["changes"]]
+        self.assertTrue(ids)
+        self.assertEqual(sorted(r["ref"] for r in self.recs), sorted(set(ids)))
+        for r in self.recs:
+            self.assertRegex(r["id"], r"^[A-Za-z0-9._:-]{1,128}$")
+            self.assertEqual(r["id"], r["ref"].replace("/", ":").replace("#", ":"))
+            self.assertEqual(r["audience"], {"owners": True})
+        one = next(r for r in self.recs if r["ref"] == "github:acme/app#1")
+        c = next(c for c in self.snap["changes"] if c["id"] == "github:acme/app#1")
+        self.assertEqual((one["state"], one["checks"], one["head"], one["projects"]), (c["state"], c["checks"]["state"], c["head"]["id"], ["app"]))
+        self.assertEqual(one["agent"], app.agent_of(c))
+        # Nothing of the body, nobody's credential.
+        self.assertNotIn("body", one)
+        self.assertNotIn("token", json.dumps(self.recs).lower())
+
+    def test_keyset_pages_cover_each_once_in_order(self):
+        order = [["updated", "desc"]]
+        seen, after = [], None
+        for _ in range(50):
+            lines = self.rows(self.OWNER_V, self.q(order=order, limit=2, after=after))
+            page = [l["row"] for l in lines if "row" in l]
+            seen += [r["id"] for r in page]
+            if not next(l for l in lines if "more" in l)["more"]:
+                break
+            after = [page[-1]["updated"], page[-1]["id"]]
+        self.assertEqual(sorted(seen), sorted(r["id"] for r in self.recs))
+        self.assertEqual(len(seen), len(set(seen)))
+
+    def test_filters_as_loom_does_and_sends_only_whats_asked(self):
+        open_ = self.rows(self.OWNER_V, self.q(where=[["state", "eq", "open"]], fields=["ref"]))
+        self.assertEqual(sorted(l["row"]["ref"] for l in open_ if "row" in l), sorted(c["id"] for c in self.snap["changes"] if c["state"] == "open"))
+        for l in open_:
+            if "row" in l:
+                self.assertEqual(set(l["row"]), {"id", "ref", "audience"})
+        named = self.rows(self.OWNER_V, self.q(where=[["ref", "in", ["github:acme/app#1", "github:nope/x#1"]]], fields=["title"]))
+        self.assertEqual([l["row"]["id"] for l in named if "row" in l], ["github:acme:app:1"])
+        self.assertEqual(self.rows(self.OWNER_V, self.q(type="nope"), self.q(id="v2", version=2)),
+                         [{"id": "q", "error": "unsupported-version"}, {"id": "v2", "error": "unsupported-version"}])
+
+    def test_household_owners_and_loom_only_decided_before_paging(self):
+        self.assertEqual(len([l for l in self.rows({"kind": "core"}, self.q()) if "row" in l]), len(self.recs))
+        for v in ({"kind": "agent", "agent": "ada"}, {"kind": "member", "household": False}, None):
+            self.assertEqual(self.rows(v, self.q(limit=1)), [{"id": "q", "more": False}])
+
+    def test_the_cli_answers_lines_and_unavailable_before_the_first_read(self):
+        import subprocess
+        batch = json.dumps({"viewer": self.OWNER_V, "queries": [self.q(fields=["ref"])]})
+        run = lambda: subprocess.run([str(HERE.parent / "bin" / "changes"), "collections", "query", "--json"], input=batch,
+                                     capture_output=True, text=True, env=os.environ)
+        got = run()
+        self.assertEqual(got.returncode, 0, got.stderr)
+        lines = [json.loads(l) for l in got.stdout.strip().splitlines()]
+        self.assertEqual(lines[-1], {"id": "q", "more": False})
+        self.assertEqual(len(lines) - 1, len(self.recs))
+        Path(self.env["CHANGES_DIR"], "snapshot.json").unlink()
+        self.assertEqual(json.loads(run().stdout), {"id": "q", "error": "unavailable"})
+
+    def test_a_read_with_nothing_changed_moves_no_record(self):
+        again = collections.records(self.sync(), app.agent_of, app.is_owners)
+        self.assertEqual(again, self.recs)
