@@ -37,6 +37,41 @@
     "sections": {
       "project": { "label": "Changes", "argv": ["loom-changes", "project-feed", "--json"] },
       "thread": { "label": "Changes", "argv": ["loom-changes", "thread-feed", "--json"] }
+    },
+    "collections": {
+      "query": ["loom-changes", "collections", "query", "--json"],
+      "types": {
+        "change": {
+          "version": "1.0",
+          "schema": {"type": "object", "properties": {"title": {"type": "string"}, "state": {"type": "string"}, "ref": {"type": "string"}}},
+          "fields": {
+            "ref": {"class": "household", "filter": ["eq", "in"]},
+            "repo": {"class": "household", "filter": ["eq", "in"], "order": true},
+            "number": {"class": "household", "order": true},
+            "title": {"class": "household", "search": true},
+            "state": {"class": "household", "filter": ["eq", "in"], "order": true},
+            "draft": {"class": "household", "filter": ["eq"]},
+            "author": {"class": "household", "filter": ["eq", "in"]},
+            "agent": {"class": "household", "filter": ["eq", "in", "has"]},
+            "mine": {"class": "household", "filter": ["eq"]},
+            "projects": {"class": "household"},
+            "head": {"class": "household"},
+            "base": {"class": "household", "filter": ["eq"]},
+            "checks": {"class": "household", "filter": ["eq", "in"]},
+            "failing": {"class": "household"},
+            "review": {"class": "household", "filter": ["eq", "in"]},
+            "mergeable": {"class": "household", "filter": ["eq"]},
+            "url": {"class": "household"},
+            "page": {"class": "household"},
+            "created": {"class": "household", "filter": ["lt", "lte", "gt", "gte"], "order": true},
+            "updated": {"class": "household", "filter": ["lt", "lte", "gt", "gte"], "order": true},
+            "closed": {"class": "household", "filter": ["has", "gte"], "order": true}
+          },
+          "default_fields": ["ref", "title", "state", "checks", "review", "updated"],
+          "max_page": 500,
+          "aggregates": {"count": {"by": ["state"]}}
+        }
+      }
     }
   }
 }

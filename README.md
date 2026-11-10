@@ -20,7 +20,14 @@ loom-changes list                   the open changes, from the snapshot
 loom-changes cited-by t-123 --json  the changes that cite a task
 loom-changes project-feed --json --project SLUG --since ISO [--repo R]…   a project hub's section
 loom-changes thread-feed --json --conversation CV [--ref R]…              a Comms thread's changes
+loom-changes collections query --json   loom's shared collection, changes/change (a batch on stdin)
 ```
+
+Every change in the snapshot is also a record of loom's shared collection
+`changes/change` (loom's `docs/specs/collections.md`; `lib/loom_changes/collections.py`):
+its state, checks, review, mergeable, head and whose it is, never its body or any
+credential, for household owners only. loom reads it by snapshot (there's no
+change log), so a record moves when the next read finds the change moved.
 
 A change can also say which loom Comms thread it was made in, but only when a
 task vouches for it: the task's description cites the change, or an agent's (or

@@ -16,7 +16,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from . import forges
+from . import collections, forges
 
 
 # ---------------------------------------------------------------- settings
@@ -918,6 +918,7 @@ USAGE = """loom-changes: what's waiting to go up, across the forges your project
     loom-changes cited-by t-123 --json  the changes that cite a task
     loom-changes project-feed --json --project SLUG --since ISO [--repo R]…   the hub's section
     loom-changes thread-feed --json --conversation CV [--ref R]…              a Comms thread's changes
+    loom-changes collections query --json   loom's shared collection, changes/change (a batch on stdin)
 
 loom's verbs: ui --json, ui page --json, ui act --json.
 """
@@ -937,6 +938,22 @@ def main(argv=None):
         # The piece API: Changes offers none. Every call is refused, owner's or agent's, with a caller or without,
         # so nothing here acts for anyone but loom's page (ui act).
         print(json.dumps({"status": 404, "body": {"error": "Changes has no API; its actions are the owner's, on loom's page"}}))
+        return
+    if args[:1] == ["collections"]:
+        # loom's shared collection (collections.py): one viewer's batch on stdin, JSON lines out. A read.
+        if [a for a in args[1:] if a != "--json"] != ["query"]:
+            sys.exit("loom-changes: collections query --json (a batch from loom on stdin)")
+        try:
+            batch = json.loads(sys.stdin.read() or "{}")
+        except ValueError:
+            sys.exit("loom-changes collections query: stdin is loom's batch, as JSON")
+        snap = load()
+        if snap is None:
+            # No snapshot yet (the service hasn't read once): unavailable, never an empty set that reads as "no changes".
+            for q in (batch.get("queries") or []):
+                print(json.dumps({"id": q.get("id"), "error": "unavailable"}))
+            return
+        sys.stdout.write("\n".join(collections.answer(batch, collections.records(snap, agent_of, is_owners))) + "\n")
         return
     if args[:1] == ["project-feed"]:
         print(json.dumps(project_feed(feed_args(args[1:]))))
